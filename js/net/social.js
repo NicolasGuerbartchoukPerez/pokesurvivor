@@ -95,6 +95,7 @@ G.Social = (() => {
   /** Presencia (latido), amigos e invitaciones. Nada de esto usa la Realtime Database. */
   function online() {
     if (beatT) return;                        // ya estaba en marcha
+    if (fb.rtdb) fb.rtdb.goOffline();         // se conecta sólo al entrar en una sala
     writeStatus();
     clearInterval(beatT);
     beatT = setInterval(() => { if (document.visibilityState === 'visible') writeStatus(); }, BEAT);
@@ -258,13 +259,13 @@ G.Social = (() => {
   }
 
   /**
-   * La Realtime Database se queda conectada mientras tengas el juego abierto
-   * (la usa también el contador de gente en línea, net/online.js). Antes se
-   * desconectaba fuera de las salas por el límite de 100 conexiones del plan
-   * gratuito; con Blaze son 200.000.
+   * La Realtime Database sólo se conecta mientras estás en una sala: cada
+   * conexión abierta gasta descargas (se pagan a partir de 360 MB al día).
+   * (El 11-10-2026 hubo un contador de gente en línea que la tenía siempre
+   * conectada; se quitó por eso.)
    */
   function rtOn() { if (fb.rtdb) fb.rtdb.goOnline(); }
-  function rtOff() { /* nada: ver arriba */ }
+  function rtOff() { if (fb && fb.rtdb && !room) fb.rtdb.goOffline(); }
 
   async function createRoom() {
     if (room) return room;

@@ -17,7 +17,7 @@
  *   id = tu uid (solitario) o los uid del equipo ordenados y unidos con "_".
  *
  * Ahorros:
- *   - Lo leído se guarda 10 min en el navegador (cambiar de pestaña y volver: 0).
+ *   - Lo leído se guarda 30 min en el navegador (cambiar de pestaña y volver: 0).
  *   - Tus mejores marcas se recuerdan en el navegador: al acabar una partida
  *     no hay que leer nada para saber si has mejorado, y sólo se escribe
  *     donde mejoras.
@@ -35,7 +35,7 @@ G.Ranking = (() => {
   // Periodos en los que sólo se guarda el top 50 (ver arriba).
   const TOP_ONLY = new Set(['d', 'w', 'm']);
   const TOP = 50;
-  const TTL = 10 * 60 * 1000;            // caché de lo leído
+  const TTL = 30 * 60 * 1000;            // caché de lo leído (30 min: menos lecturas de Firestore)
 
   const fbx = () => G.DB.online ? G.DB.fb : null;
 
@@ -221,7 +221,7 @@ G.Ranking = (() => {
 
   // ---------------- leer ----------------
 
-  /** El top 50 de una tabla (1 lectura, o 0 si se leyó hace menos de 10 min). */
+  /** El top 50 de una tabla (1 lectura, o 0 si se leyó hace menos de 30 min). */
   const inflight = new Map();             // tabla -> lectura en curso (la lista y tu puesto la comparten)
   async function summary(b) {
     const c = cacheGet('s:' + b);
@@ -250,7 +250,7 @@ G.Ranking = (() => {
     const inTop = rows.filter(r => r.uids.some(u => circle.includes(u)));
     // En diario, semanal y mensual no hay marcas fuera del top 50: no hay nada más que buscar.
     if (TOP_ONLY.has(period)) return inTop;
-    // Los amigos que no están en el top 50: se buscan aparte (y se guardan 10 min).
+    // Los amigos que no están en el top 50: se buscan aparte (y se guardan 30 min).
     const ck = 'f:' + b + ':' + circle.slice().sort().join(',');
     let extra = cacheGet(ck);
     if (extra === undefined) {

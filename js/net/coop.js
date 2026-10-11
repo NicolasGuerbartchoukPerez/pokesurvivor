@@ -18,7 +18,10 @@
 G.Coop = (() => {
   const ANIMS = ['Idle', 'Walk', 'Attack', 'Shoot', 'Charge', 'Hurt', 'Faint'];
   const COLORS = ['#ffcb3d', '#5fc8ff', '#7ee07a', '#ff8ad8'];
-  const RATE_FAST = 1 / 15, RATE_SLOW = 1 / 5;
+  // Mensajes por segundo: 15 directo, 7 por el TURN de Cloudflare (se paga por
+  // GB) y 3 por el relé de la Realtime Database (1 $ el GB: sólo si todo lo demás falla).
+  const RATE_FAST = 1 / 15, RATE_TURN = 1 / 7, RATE_SLOW = 1 / 3;
+  const rateFor = u => (G.Net.slow(u) ? RATE_SLOW : G.Net.viaTurn(u) ? RATE_TURN : RATE_FAST);
   const NEAR = 950;                     // radio de enemigos que se mandan a cada uno
 
   let active = false, host = false, me = null, hostUid = null;
@@ -177,13 +180,13 @@ G.Coop = (() => {
         if (!m.connected) continue;
         m.flushT -= dt;
         if (m.flushT > 0) continue;
-        m.flushT = G.Net.slow(m.uid) ? RATE_SLOW : RATE_FAST;
+        m.flushT = rateFor(m.uid);
         G.Net.send(m.uid, hostFrame(m));
       }
     } else {
       flushT -= dt;
       if (flushT <= 0) {
-        flushT = G.Net.slow(hostUid) ? RATE_SLOW : RATE_FAST;
+        flushT = rateFor(hostUid);
         G.Net.toHost({ k: 'f', p: myState(), ev: outEv });
         outEv = [];
       }

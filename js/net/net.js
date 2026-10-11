@@ -126,13 +126,28 @@ G.Net = (() => {
 
   function wireChannel(u, p, dc) {
     p.dc = dc;
-    dc.onopen = () => { clearTimeout(p.timer); p.mode = 'direct'; emitPeer(u); };
+    dc.onopen = () => { clearTimeout(p.timer); p.mode = 'direct'; emitPeer(u); checkTurn(p); };
     dc.onclose = () => { if (p.mode === 'direct') { p.mode = 'relay'; emitPeer(u); } };
     dc.onmessage = e => {
       let m;
       try { m = JSON.parse(e.data); } catch (err) { return; }
       deliver(u, m);
     };
+  }
+
+  /**
+   * ¿El canal "directo" pasa en realidad por el TURN de Cloudflare? Entonces se
+   * manda menos a menudo (ver coop.js): el TURN se paga por GB a partir de 1.000 al mes.
+   */
+  async function checkTurn(p) {
+    try {
+      const st = await p.pc.getStats();
+      st.forEach(s => {
+        if (s.type !== 'candidate-pair' || !s.nominated || s.state !== 'succeeded') return;
+        const l = st.get(s.localCandidateId), r = st.get(s.remoteCandidateId);
+        if ((l && l.candidateType === 'relay') || (r && r.candidateType === 'relay')) p.turn = true;
+      });
+    } catch (e) { /* nada */ }
   }
 
   function useRelay(u) {
@@ -232,6 +247,8 @@ G.Net = (() => {
     mode(u) { const p = peers.get(u); return p ? p.mode : 'closed'; },
     /** ¿Va por el relé? Entonces se manda menos a menudo. */
     slow(u) { const p = peers.get(u); return !p || p.mode !== 'direct'; },
+    /** ¿Va directo pero a través del TURN de Cloudflare? (se manda algo menos) */
+    viaTurn(u) { const p = peers.get(u); return !!p && p.mode === 'direct' && !!p.turn; },
     peers() { return [...peers.keys()]; },
     get open_() { return !!roomId; },
     get isHost() { return isHost; },
