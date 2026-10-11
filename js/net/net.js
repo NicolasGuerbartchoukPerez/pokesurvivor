@@ -5,9 +5,13 @@
  * Dos caminos, a la vez:
  *   directo  WebRTC (canal de datos entre navegadores, sin pasar por ningún
  *            servidor). La negociación (señalización) va por la base de datos.
- *   relé     Si la red no deja conectar directo (algunos routers y datos
- *            móviles), los mensajes van por la Realtime Database:
- *            rooms/{sala}/q/{destinatario}/{id}. Más lento, pero funciona.
+ *            Si la red no deja conectar directo (algunos routers y datos
+ *            móviles), WebRTC pasa por el TURN de Cloudflare (sigue siendo
+ *            "directo" para el juego). Las claves las da cloudflare/turn-worker.js
+ *            sólo a jugadores con cuenta.
+ *   relé     Si ni así (o el Worker no responde), los mensajes van por la
+ *            Realtime Database: rooms/{sala}/q/{destinatario}/{id}. Funciona,
+ *            pero cuesta 1 $ el GB: antes del TURN era casi todo el gasto.
  *
  * Se envía por el canal directo si está abierto; si no, por el relé. El que
  * recibe escucha los dos, así que no hace falta ponerse de acuerdo.
@@ -20,6 +24,30 @@ G.Net = (() => {
   const ICE = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
                { urls: 'stun:stun.cloudflare.com:3478' }];
   const DIRECT_TIMEOUT = 9000;     // ms para conseguir canal directo antes de usar el relé
+
+  // ---------------- TURN (Cloudflare) ----------------
+  const TURN_URL = 'https://turn.pokesurvivor.com/';
+  let turn = null, turnAt = 0, turnReq = null;
+  /** Pide (o reutiliza) credenciales TURN. Nunca falla: sin ellas, se sigue como antes. */
+  function fetchTurn() {
+    const fb = G.DB.fb;
+    if (!fb || fb.emulator || !fb.auth || !fb.auth.currentUser) return Promise.resolve(null);
+    if (turn && Date.now() - turnAt < (turn.ttl - 600) * 1000) return Promise.resolve(turn);
+    if (turnReq) return turnReq;
+    turnReq = fb.auth.currentUser.getIdToken()
+      .then(tok => fetch(TURN_URL, { headers: { Authorization: 'Bearer ' + tok } }))
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => {
+        if (j && j.iceServers) { turn = { servers: [].concat(j.iceServers), ttl: j.ttl || 3600 }; turnAt = Date.now(); }
+        return turn;
+      })
+      .catch(e => { console.warn('[Net] TURN:', e.message); return null; })
+      .finally(() => { turnReq = null; });
+    return turnReq;
+  }
+  /** Espera las credenciales como mucho 2,5 s (si tardan más, se conecta sin ellas). */
+  const waitTurn = () => Promise.race([fetchTurn(), new Promise(r => setTimeout(r, 2500))]);
+  const iceServers = () => (turn ? ICE.concat(turn.servers) : ICE);
 
   let rtdb = null, uid = null, roomId = null, isHost = false, hostUid = null;
   let qref = null;
@@ -40,6 +68,7 @@ G.Net = (() => {
     const fb = G.DB.fb;
     rtdb = fb.rtdb; uid = fb.uid;
     roomId = id; isHost = host; hostUid = hostId;
+    fetchTurn();                    // se piden ya, para tenerlas al conectar
     qref = rtdb.ref('rooms/' + id + '/q/' + uid);
     qref.on('child_added', s => {
       const raw = s.val();
@@ -83,7 +112,7 @@ G.Net = (() => {
     peers.set(u, p);
     // Sin WebRTC (navegador antiguo o bloqueado): directamente por el relé.
     let pc;
-    try { pc = p.pc = new RTCPeerConnection({ iceServers: ICE }); }
+    try { pc = p.pc = new RTCPeerConnection({ iceServers: iceServers() }); }
     catch (e) { p.mode = 'relay'; emitPeer(u); return p; }
     pc.onicecandidate = e => { if (e.candidate) signal(u, { c: e.candidate.toJSON() }); };
     pc.onconnectionstatechange = () => {
@@ -115,6 +144,8 @@ G.Net = (() => {
 
   /** Anfitrión: abre conexión con un invitado. */
   async function connect(u) {
+    await waitTurn();
+    if (!roomId || peers.has(u)) return;
     const p = newPeer(u);
     if (!p.pc) return;
     wireChannel(u, p, p.pc.createDataChannel('g', { ordered: true }));
@@ -133,6 +164,7 @@ G.Net = (() => {
       if (sig.sdp && sig.sdp.type === 'offer') {
         if (isHost) return;
         if (p) drop(from, true);
+        await waitTurn();
         p = newPeer(from);
         if (!p.pc) return;
         p.pc.ondatachannel = e => wireChannel(from, p, e.channel);
@@ -205,6 +237,8 @@ G.Net = (() => {
     get isHost() { return isHost; },
     get uid() { return uid; },
     get hostUid() { return hostUid; },
-    stats
+    stats,
+    /** ¿Hay credenciales TURN? (para pruebas y diagnóstico) */
+    get turn() { return !!turn; }
   };
 })();
